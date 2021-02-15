@@ -1,6 +1,6 @@
 {
 	"$schema": "http://json-schema.org/draft-07/schema#",
-	"$id": "http://github.com/ray-project/ray/python/ray/autoscaler/ray-schema.json",
+	"$id": "http://github.com/amzn/amazon-ray/python/ray/autoscaler/ray-schema.json",
 	"title": "Ray AutoScaler",
 	"description": "Ray autoscaler schema",
 	"type": "object",
@@ -69,7 +69,7 @@
                     "type": "string",
                     "description": "e.g. aws, azure, gcp,..."
                 },
-                "region": { 
+                "region": {
                     "type": "string",
                     "description": "e.g. us-east-1"
                 },
@@ -174,6 +174,63 @@
                         "credentials": {
                             "type": "string",
                             "description": "Oauth token or JSON string constituting service account credentials"
+                        }
+                    }
+                },
+                "cloud_formation": {
+                    "type": "array",
+                    "description": "AWS cloud formation stacks to deploy before applying Ray cluster config. Stacks are deployed in the order given.",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["stack_name"],
+                        "properties": {
+                            "stack_name": {
+                                "type": "string",
+                                "description": "AWS cloud formation stack name"
+                            },
+                            "template_file": {
+                                "type": "string",
+                                "description": "AWS cloud formation template file path"
+                            },
+                            "create_stack_args": {
+                                "type": "object",
+                                "description": "Additional create stack arguments. See https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/cloudformation.html#CloudFormation.Client.create_stack."
+                            },
+                            "update_stack_args": {
+                                "type": "object",
+                                "description": "Additional update stack arguments. See https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/cloudformation.html#CloudFormation.Client.update_stack."
+                            }
+                        }
+                    }
+                },
+                "cloudwatch": {
+                    "agent": {
+                        "config": {
+                            "type": ["string", "null"],
+                            "description": "Path to CloudWatch Agent config file. See https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-Configuration-File-Details.html for additional details."
+                        },
+                        "retryer": {
+                            "max_attempts": {
+                                "type": ["integer", "null"],
+                                "description": "Max allowed CloudWatch agent installation attempts on any host."
+                            },
+                            "delay_seconds": {
+                                "type": ["integer", "null"],
+                                "description": "Seconds to wait between each CloudWatch agent installation attempt."
+                            }
+                        }
+                    },
+                    "dashboard": {
+                        "config": {
+                            "type": ["string", "null"],
+                            "description": "Path to CloudWatch Dashboard config file. See https://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/CloudWatch-Dashboard-Body-Structure.html for additional details."
+                        }
+                    },
+                    "alarm": {
+                        "config": {
+                            "type": ["string", "null"],
+                            "description": "Path to CloudWatch Alarm config file. See https://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_PutMetricAlarm.html for additional details."
                         }
                     }
                 }

@@ -1,6 +1,7 @@
 from distutils.version import StrictVersion
 from functools import lru_cache
 from functools import partial
+import copy
 import itertools
 import json
 import os
@@ -8,17 +9,17 @@ import time
 import logging
 
 import boto3
-from botocore.config import Config
 import botocore
 
-from ray.autoscaler._private.constants import BOTO_MAX_RETRIES
 from ray.autoscaler.tags import NODE_KIND_WORKER, NODE_KIND_HEAD
 from ray.autoscaler._private.providers import _PROVIDER_PRETTY_NAMES
 from ray.autoscaler._private.aws.utils import LazyDefaultDict, \
-    handle_boto_error
+    handle_boto_error, resource_cache
 from ray.autoscaler._private.cli_logger import cli_logger, cf
 from ray.autoscaler._private.event_system import (CreateClusterEvent,
                                                   global_event_system)
+from ray.autoscaler._private.aws.cloudwatch.cloudwatch_helper import \
+    CloudwatchHelper as cwh
 
 logger = logging.getLogger(__name__)
 
@@ -154,11 +155,11 @@ def log_to_cli(config):
                     _tags=workers_tags)
 
         tags = {"default": _log_info["head_instance_profile_src"] == "default"}
-        cli_logger.labeled_value(
-            "IAM Profile",
-            "{}",
-            _arn_to_name(config["head_node"]["IamInstanceProfile"]["Arn"]),
-            _tags=tags)
+        profile_arn = config["head_node"]["IamInstanceProfile"].get("Arn")
+        profile_name = _arn_to_name(profile_arn) \
+            if profile_arn \
+            else config["head_node"]["IamInstanceProfile"]["Name"]
+        cli_logger.labeled_value("IAM Profile", "{}", profile_name, _tags=tags)
 
         if ("KeyName" in config["head_node"]
                 and "KeyName" in config["worker_nodes"]):
@@ -187,6 +188,17 @@ def log_to_cli(config):
 
 
 def bootstrap_aws(config):
+    # Deploy any prerequisite Cloud Formation stack
+    _deploy_cloud_formation_stacks(config)
+
+    # If a LaunchTemplate is provided, extract the necessary fields for the
+    # config stages below.
+    config = _configure_from_launch_template(config)
+
+    # If NetworkInterfaces are provided, extract the necessary fields for the
+    # config stages below.
+    config = _configure_from_network_interfaces(config)
+
     # The head node needs to have an IAM role that allows it to create further
     # EC2 instances.
     config = _configure_iam_role(config)
@@ -210,13 +222,69 @@ def bootstrap_aws(config):
     return config
 
 
+def _deploy_cloud_formation_stacks(config):
+    stack_configs = config["provider"].get("cloud_formation")
+    if stack_configs and len(stack_configs):
+        for stack_config in stack_configs:
+            stack_name = stack_config.get("stack_name")
+            if stack_name:
+                cloud_formation = _client("cloudformation", config)
+                _deploy_stack(cloud_formation, stack_name, stack_config)
+
+
+def _deploy_stack(cloud_formation, stack_name, stack_config):
+    template_file = stack_config.get("template_file")
+    if template_file:
+        template_body = _read_template_body(cloud_formation, template_file)
+
+    stacks = cloud_formation.list_stacks()["StackSummaries"]
+    update_stack = next((stack for stack in stacks
+                         if stack["StackName"] == stack_name
+                         and stack["StackStatus"] != "DELETE_COMPLETE"), None)
+
+    params = {"StackName": stack_name, "TemplateBody": template_body}
+    if update_stack:
+        deploy_stack = cloud_formation.update_stack
+        waiter = cloud_formation.get_waiter("stack_update_complete")
+        params.update(stack_config.get("update_stack_args"))
+    else:
+        deploy_stack = cloud_formation.create_stack
+        waiter = cloud_formation.get_waiter("stack_create_complete")
+        params.update(stack_config.get("create_stack_args"))
+    try:
+        logger.info("Deploying cloud formation stack: {}".format(stack_name))
+        deploy_stack(**params)
+        logger.info("Waiting for deploy to complete...")
+        waiter.wait(StackName=stack_name)
+        logger.info("Cloud formation stack deploy complete")
+    except botocore.exceptions.ClientError as exc:
+        # error type of "ValidationError" and HTTP status code of 400 are not
+        # unique to this error, so we have to check the error mesage
+        message = exc.response["Error"]["Message"]
+        if message == "No updates are to be performed.":
+            logger.info("Cloud formation stack already up-to-date")
+        else:
+            raise
+
+
+def _read_template_body(cloud_formation, template):
+    with open(template) as file:
+        template_body = file.read()
+    cloud_formation.validate_template(TemplateBody=template_body)
+    return template_body
+
+
 def _configure_iam_role(config):
     if "IamInstanceProfile" in config["head_node"]:
         _set_config_info(head_instance_profile_src="config")
         return config
     _set_config_info(head_instance_profile_src="default")
 
-    profile = _get_instance_profile(DEFAULT_RAY_INSTANCE_PROFILE, config)
+    instance_profile_name = cwh.resolve_instance_profile_name(
+        config,
+        DEFAULT_RAY_INSTANCE_PROFILE,
+    )
+    profile = _get_instance_profile(instance_profile_name, config)
 
     if profile is None:
         cli_logger.verbose(
@@ -233,35 +301,43 @@ def _configure_iam_role(config):
     assert profile is not None, "Failed to create instance profile"
 
     if not profile.roles:
-        role = _get_role(DEFAULT_RAY_IAM_ROLE, config)
+        role_name = cwh.resolve_iam_role_name(config, DEFAULT_RAY_IAM_ROLE)
+        role = _get_role(role_name, config)
         if role is None:
             cli_logger.verbose(
                 "Creating new IAM role {} for "
                 "use as the default instance role.",
                 cf.bold(DEFAULT_RAY_IAM_ROLE))
             iam = _resource("iam", config)
-            iam.create_role(
-                RoleName=DEFAULT_RAY_IAM_ROLE,
-                AssumeRolePolicyDocument=json.dumps({
-                    "Statement": [
-                        {
-                            "Effect": "Allow",
-                            "Principal": {
-                                "Service": "ec2.amazonaws.com"
-                            },
-                            "Action": "sts:AssumeRole",
+            policy_doc = {
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": "ec2.amazonaws.com"
                         },
-                    ],
-                }))
-            role = _get_role(DEFAULT_RAY_IAM_ROLE, config)
+                        "Action": "sts:AssumeRole",
+                    },
+                ]
+            }
+            attach_policy_arns = cwh.resolve_policy_arns(
+                config, [
+                    "arn:aws:iam::aws:policy/AmazonEC2FullAccess",
+                    "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+                ])
 
+            iam.create_role(
+                RoleName=role_name,
+                AssumeRolePolicyDocument=json.dump(policy_doc))
+            role = _get_role(role_name, config)
             cli_logger.doassert(role is not None,
                                 "Failed to create role.")  # todo: err msg
+
             assert role is not None, "Failed to create role"
-        role.attach_policy(
-            PolicyArn="arn:aws:iam::aws:policy/AmazonEC2FullAccess")
-        role.attach_policy(
-            PolicyArn="arn:aws:iam::aws:policy/AmazonS3FullAccess")
+
+            for policy_arn in attach_policy_arns:
+                role.attach_policy(PolicyArn=policy_arn)
+
         profile.add_role(RoleName=role.name)
         time.sleep(15)  # wait for propagation
 
@@ -420,8 +496,9 @@ def _configure_security_group(config):
 
     node_types_to_configure = [
         node_type for node_type, config_key in NODE_KIND_CONFIG_KEYS.items()
-        if "SecurityGroupIds" not in config[NODE_KIND_CONFIG_KEYS[node_type]]
+        if "SecurityGroupIds" not in config[config_key]
     ]
+
     if not node_types_to_configure:
         return config  # have user-defined groups
 
@@ -667,6 +744,86 @@ def _get_key(key_name, config):
         raise exc
 
 
+def _configure_from_launch_template(config):
+    for cfg_key in NODE_KIND_CONFIG_KEYS.values():
+        config = _configure_node_type_from_launch_template(config, cfg_key)
+    return config
+
+
+def _configure_node_type_from_launch_template(config, node_type):
+    node_cfg = config[node_type]
+    if "LaunchTemplate" not in node_cfg:
+        return config
+
+    ec2 = _client("ec2", config)
+    kwargs = copy.deepcopy(node_cfg["LaunchTemplate"])
+    template_version = kwargs.pop("Version", "$Default")
+    kwargs["Versions"] = [template_version] if template_version else []
+
+    template = ec2.describe_launch_template_versions(**kwargs)
+    lt_versions = template["LaunchTemplateVersions"]
+    cli_logger.doassert(
+        len(lt_versions) == 1,
+        "Expected to find 1 launch template but found {}".format(
+            len(lt_versions)))
+    assert len(lt_versions) == 1, \
+        "Expected to find 1 launch template but found {}" \
+        .format(len(lt_versions))
+    lt_data = template["LaunchTemplateVersions"][0]["LaunchTemplateData"]
+
+    # override launch template parameters with explicit node config parameters
+    lt_data.update(node_cfg)
+    # copy all new launch template parameters back to node config
+    node_cfg.update(lt_data)
+
+    return config
+
+
+def _configure_from_network_interfaces(config):
+    for cfg_key in NODE_KIND_CONFIG_KEYS.values():
+        config = _configure_node_type_from_network_interface(config, cfg_key)
+    return config
+
+
+def _configure_node_type_from_network_interface(config, node_type):
+    node_cfg = config[node_type]
+    if "NetworkInterfaces" not in node_cfg:
+        return config
+    _configure_subnets_and_groups_from_network_interfaces(node_cfg)
+    return config
+
+
+def _configure_subnets_and_groups_from_network_interfaces(node_cfg):
+    # If NetworkInterfaces are defined, SubnetId and SecurityGroupIds
+    # can't be specified in head/worker node config.
+    conflict_keys = ["SubnetId", "SubnetIds", "SecurityGroupIds"]
+    if any(conflict in node_cfg for conflict in conflict_keys):
+        raise ValueError(
+            "If NetworkInterfaces are defined, subnets and security groups"
+            "must ONLY be given in each NetworkInterface.")
+    if not all(_subnets_in_network_config(node_cfg)):
+        raise ValueError(
+            "NetworkInterfaces are defined but at least one is missing a "
+            "subnet. Please ensure all interfaces have a subnet assigned.")
+    if not all(_security_groups_in_network_config(node_cfg)):
+        raise ValueError(
+            "NetworkInterfaces are defined but at least one is missing a "
+            "security group. Please ensure all interfaces have a security "
+            "group assigned.")
+    node_cfg["SubnetIds"] = _subnets_in_network_config(node_cfg)
+    node_cfg["SecurityGroupIds"] = _security_groups_in_network_config(node_cfg)
+
+
+def _subnets_in_network_config(config):
+    return [
+        ni.get("SubnetId", "") for ni in config.get("NetworkInterfaces", [])
+    ]
+
+
+def _security_groups_in_network_config(config):
+    return [ni.get("Groups", []) for ni in config.get("NetworkInterfaces", [])]
+
+
 def _client(name, config):
     return _resource(name, config).meta.client
 
@@ -674,15 +831,4 @@ def _client(name, config):
 def _resource(name, config):
     region = config["provider"]["region"]
     aws_credentials = config["provider"].get("aws_credentials", {})
-    return _resource_cache(name, region, **aws_credentials)
-
-
-@lru_cache()
-def _resource_cache(name, region, **kwargs):
-    boto_config = Config(retries={"max_attempts": BOTO_MAX_RETRIES})
-    return boto3.resource(
-        name,
-        region,
-        config=boto_config,
-        **kwargs,
-    )
+    return resource_cache(name, region, **aws_credentials)
