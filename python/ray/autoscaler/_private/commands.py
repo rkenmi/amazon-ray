@@ -318,7 +318,8 @@ def _bootstrap_config(config: Dict[str, Any],
         with open(cache_key, "w") as f:
             config_cache = {
                 "_version": CONFIG_CACHE_VERSION,
-                "provider_log_info": try_get_log_state(config["provider"]),
+                "provider_log_info": try_get_log_state(
+                    resolved_config["provider"]),
                 "config": resolved_config
             }
             f.write(json.dumps(config_cache))
@@ -689,6 +690,8 @@ def get_or_create_head_node(config: Dict[str, Any],
         if not no_restart:
             warn_about_bad_start_command(ray_start_commands,
                                          no_monitor_on_head)
+
+        provider.update_nodes(nodes)
 
         updater = NodeUpdaterThread(
             node_id=head_node,

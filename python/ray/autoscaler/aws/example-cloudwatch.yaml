@@ -1,0 +1,48 @@
+cluster_name: cloudwatch
+
+max_workers: 2
+
+provider:
+    type: aws
+    region: us-west-2
+    availability_zone: us-west-2a
+    cache_stopped_nodes: false
+    cloudwatch:
+        agent:
+            config: "cloudwatch/example-cloudwatch-agent-config.json"
+            retryer:
+                max_attempts: 120
+                delay_seconds: 30
+        dashboard:
+            name: "example-dashboard-name"
+            config: "cloudwatch/example-cloudwatch-dashboard-config.json"
+        alarm:
+            config: "cloudwatch/example-cloudwatch-alarm-config.json"
+
+auth:
+    ssh_user: ubuntu
+
+available_node_types:
+    ray.head.default:
+        node_config:
+            InstanceType: m5.large
+            ImageId: latest_dlami
+        resources: {}
+    ray.worker.default:
+        node_config:
+            InstanceType: m5.large
+            ImageId: latest_dlami
+        resources: {}
+
+head_node_type: ray.head.default
+
+file_mounts: {
+    "/tmp/prometheus.yml" : "cloudwatch/prometheus.yml",
+    "/tmp" : "cloudwatch/ray_prometheus_waiter.sh"
+}
+
+head_setup_commands:
+    - sudo mv -f /tmp/prometheus.yml /opt/aws/amazon-cloudwatch-agent/etc
+    - sudo mv -f /tmp/ray_prometheus_waiter.sh /opt/aws/amazon-cloudwatch-agent/bin
+    - sudo chmod +x /opt/aws/amazon-cloudwatch-agent/bin/ray_prometheus_waiter.sh
+    - nohup sudo sh -c "/opt/aws/amazon-cloudwatch-agent/bin/ray_prometheus_waiter.sh `cat ~/ray_bootstrap_config.yaml | python -c 'import sys, json; print(json.load(sys.stdin)["cluster_name"])' ` >> '/opt/aws/amazon-cloudwatch-agent/logs/ray_prometheus_waiter.out' 2>> '/opt/aws/amazon-cloudwatch-agent/logs/ray_prometheus_waiter.err'" &
