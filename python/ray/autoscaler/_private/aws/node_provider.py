@@ -21,8 +21,8 @@ from ray.autoscaler._private.cli_logger import cli_logger, cf
 import ray.ray_constants as ray_constants
 
 from ray.autoscaler._private.aws.cloudwatch.cloudwatch_helper import \
-    CloudwatchHelper, CLOUDWATCH_AGENT_INSTALLED_AMI_TAG,\
-    CLOUDWATCH_AGENT_INSTALLED_TAG
+    CloudwatchHelper, CloudwatchConfigType, \
+    CLOUDWATCH_AGENT_INSTALLED_AMI_TAG, CLOUDWATCH_AGENT_INSTALLED_TAG
 
 logger = logging.getLogger(__name__)
 
@@ -360,8 +360,8 @@ class AWSNodeProvider(NodeProvider):
                 "Key": k,
                 "Value": v,
             })
-        if CloudwatchHelper.cloudwatch_config_exists(self.provider_config,
-                                                     "config"):
+        if CloudwatchHelper.cloudwatch_config_exists(
+                self.provider_config, CloudwatchConfigType.AGENT):
             cwa_installed = self._check_ami_cwa_installation(node_config)
             if cwa_installed:
                 tag_pairs.extend([{
