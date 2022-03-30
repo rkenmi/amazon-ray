@@ -5,6 +5,12 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from ray.autoscaler._private.cli_logger import cli_logger
 
 
+DISPATCHED_STATE = "DISPATCHED"
+STARTED_STATE = "STARTED"
+IN_PROGRESS_STATE = "IN_PROGRESS"
+COMPLETED_STATE = "COMPLETED"
+
+
 class CreateClusterEvent(Enum):
     """Events to track in ray.autoscaler.sdk.create_or_update_cluster.
 
@@ -25,6 +31,9 @@ class CreateClusterEvent(Enum):
         cluster_booting_completed : Invoked after cluster booting
             is completed.
     """
+    @property
+    def state(self):
+        return DISPATCHED_STATE
 
     up_started = auto()
     ssh_keypair_downloaded = auto()
@@ -37,6 +46,51 @@ class CreateClusterEvent(Enum):
     start_ray_runtime = auto()
     start_ray_runtime_completed = auto()
     cluster_booting_completed = auto()
+
+
+class ScriptStartedEvent(Enum):
+    """Events to track for Ray scripts that are executed.
+
+    Attributes:
+        start_initializing : Invoked right before running a Ray script.
+    """
+    @property
+    def state(self):
+        return STARTED_STATE
+
+    start_initializing = auto()
+
+
+class ScriptInProgressEvent(Enum):
+    """Events to track for Ray scripts that are executed.
+
+    Attributes:
+        in_progress : Invoked when the Ray script starts execution.
+    """
+    @property
+    def state(self):
+        return IN_PROGRESS_STATE
+
+    in_progress = auto()
+
+
+class ScriptCompletedEvent(Enum):
+    """Events to track for Ray scripts that are executed.
+
+    Attributes:
+        complete_success : Invoked when the Ray script execution succeeds.
+    """
+    @property
+    def state(self):
+        return COMPLETED_STATE
+
+    complete_success = auto()
+
+
+RayEvent = Union[CreateClusterEvent, ScriptStartedEvent, ScriptInProgressEvent, ScriptCompletedEvent]
+event_enums = [CreateClusterEvent, ScriptStartedEvent, ScriptInProgressEvent, ScriptCompletedEvent]
+event_enum_values = [sequence for event in event_enums
+                     for sequence in event.__members__.values()]
 
 
 class _EventSystem:
@@ -69,7 +123,7 @@ class _EventSystem:
             *args: Variable length arguments to be injected into callbacks.
             **kwargs: Keyword arguments to be injected into callbacks.
         """
-        if event not in CreateClusterEvent.__members__.values():
+        if event not in event_enum_values:
             cli_logger.warning(f"{event} is not currently tracked, and this"
                                " callback will not be invoked.")
 
@@ -79,7 +133,7 @@ class _EventSystem:
             []).extend([callback] if type(callback) is not list else callback)
 
     def execute_callback(self,
-                         event: CreateClusterEvent,
+                         event: RayEvent,
                          event_data: Optional[Dict[str, Any]] = None):
         """Executes all callbacks for event.
 
@@ -109,3 +163,4 @@ class _EventSystem:
 
 
 global_event_system = _EventSystem()
+
