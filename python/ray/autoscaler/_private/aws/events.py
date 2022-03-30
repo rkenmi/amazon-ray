@@ -13,6 +13,7 @@ from ray.autoscaler._private.event_system import CreateClusterEvent, ScriptStart
     ScriptCompletedEvent, RayEvent, event_enum_values, global_event_system
 from ray.autoscaler._private.event_publisher import EventPublisher
 from ray.autoscaler._private.updater import NodeContext
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,9 @@ class AwsEventManagerBase(ABC):
         elif self.uri.startswith("arn:aws:apigateway"):
             global_event_system.add_callback_handler(event, self._api_gateway_callback)
             logger.info("Added API Gateway callback handler for event %s", event.name)
+
+    def publish(self, event: RayEvent, event_data: Optional[Dict[str, Any]] = None):
+        global_event_system.execute_callback(event, event_data)
 
     def _get_region(self):
         return self.uri.split(":")[3]
@@ -86,7 +90,8 @@ class AwsEventManager(AwsEventManagerBase):
                 "state": event.state,
                 "setupEventMetadata": event_dict,
                 "stateSequence": event.value - 1,  # zero-index sequencing
-                "timestamp": round(time.time() * 1000)
+                "stateDetailStatus": "SUCCESS",
+                "timestamp": round(time.time() * 1000),
             }
 
             if node_context:
@@ -101,12 +106,3 @@ class AwsEventManager(AwsEventManagerBase):
                 "{} Error caught when publishing {} create cluster events to SNS",
                 exc.response["Error"], event.name)
 
-
-class AwsEventPublisher(EventPublisher):
-    def __init__(self, events_config: Dict[str, Any]):
-        self.events_mgr = AwsEventManager(events_config)
-        for event in event_enum_values:
-            self.events_mgr.add_callback(event)
-
-    def publish(self, trace_id: str, event: RayEvent):
-        global_event_system.execute_callback(event, {"foo": "bar"})
