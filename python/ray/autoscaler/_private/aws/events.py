@@ -30,16 +30,16 @@ class AwsEventManagerBase(ABC):
                                                      self._sns_callback,
                                                      SnsHelper(self._get_region()),
                                                      **self.parameters)
-            logger.info("Added SNS callback handler for event {}", event)
+            logger.info("Added SNS callback handler for event %s", event.name)
         elif self.uri.startswith("arn:aws:lambda"):
             global_event_system.add_callback_handler(event, self._lambda_callback)
-            logger.info("Added Lambda callback handler for event {}", event)
+            logger.info("Added Lambda callback handler for event %s", event.name)
         elif self.uri.startswith("arn:aws:logs"):
             global_event_system.add_callback_handler(event, self._cloudwatch_callback)
-            logger.info("Added Cloudwatch callback handler for event {}", event)
+            logger.info("Added Cloudwatch callback handler for event %s", event.name)
         elif self.uri.startswith("arn:aws:apigateway"):
             global_event_system.add_callback_handler(event, self._api_gateway_callback)
-            logger.info("Added API Gateway callback handler for event {}", event)
+            logger.info("Added API Gateway callback handler for event %s", event.name)
 
     def _get_region(self):
         return self.uri.split(":")[3]
