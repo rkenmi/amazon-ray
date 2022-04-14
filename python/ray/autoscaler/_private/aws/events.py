@@ -10,7 +10,7 @@ from botocore.exceptions import ClientError
 from ray.autoscaler._private.aws.sns.snsu import SnsHelper
 from ray.autoscaler._private.cli_logger import cli_logger
 from ray.autoscaler._private.event_system import CreateClusterEvent, ScriptStartedEvent, ScriptInProgressEvent, \
-    ScriptCompletedEvent, RayEvent, event_enum_values, global_event_system
+    ScriptCompletedEvent, RayEvent, event_enum_values, global_event_system, ScriptInProgressCustomEvent
 from ray.autoscaler._private.event_publisher import EventPublisher
 from ray.autoscaler._private.updater import NodeContext
 from typing import Optional
@@ -56,9 +56,6 @@ class AwsEventManagerBase(ABC):
     def config(self) -> Dict[str, Any]:
         raise NotImplementedError("Configuration is not defined")
 
-    def set_config(self, config: Dict[str, Any]):
-        self.config = config
-
     @abstractmethod
     def _sns_callback(self, sns_client: SnsHelper, event_data: Dict[str, Any], **kwargs):
         raise NotImplementedError("SNS callback is not implemented")
@@ -98,13 +95,12 @@ class AwsEventManager(AwsEventManagerBase):
         try:
             # create a copy of the event data to modify
             event_dict = copy.deepcopy(event_data)
-            event: RayEvent = event_dict.pop("event_name")
+            event: RayEvent = event_dict.pop("event")
             node_context: NodeContext = event_dict.get("node_context", {})
             sns_topic_arn, params = self.uri, kwargs
             message = {
                 **params,
                 "state": event.state,
-                # "setupEventMetadata": event_dict,
                 "stateSequence": event.value - 1,  # zero-index sequencing
                 "stateDetailStatus": "SUCCESS",
                 "timestamp": round(time.time() * 1000),

@@ -169,7 +169,7 @@ class _EventSystem:
         if event_data is None:
             event_data = {}
 
-        event_data["event_name"] = event
+        event_data["event"] = event
         if event in self.callback_map:
             for callback in self.callback_map[event]:
                 callback(event_data)
