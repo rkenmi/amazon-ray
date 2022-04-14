@@ -62,7 +62,7 @@ class ScriptStartedEvent(Enum):
 
 
 class ScriptInProgressEvent(Enum):
-    """Events to track for Ray scripts that are executed.
+    """Events to track during execution of Ray scripts.
 
     Attributes:
         in_progress : Invoked when the Ray script starts execution.
@@ -72,6 +72,28 @@ class ScriptInProgressEvent(Enum):
         return IN_PROGRESS_STATE
 
     in_progress = auto()
+
+
+class ScriptInProgressCustomEvent:
+    """Custom, user-defined events to track during execution of Ray scripts.
+
+    """
+    @property
+    def state(self):
+        return IN_PROGRESS_STATE
+
+    @property
+    def name(self) -> str:
+        return self.event_name
+
+    @property
+    def value(self) -> int:
+        return self.state_sequence
+
+    def __init__(self, event_name: str, state_sequence: int):
+        self.event_name = event_name
+        self.state_sequence = state_sequence
+
 
 
 class ScriptCompletedEvent(Enum):
@@ -87,7 +109,8 @@ class ScriptCompletedEvent(Enum):
     complete_success = auto()
 
 
-RayEvent = Union[CreateClusterEvent, ScriptStartedEvent, ScriptInProgressEvent, ScriptCompletedEvent]
+RayEvent = Union[CreateClusterEvent, ScriptStartedEvent, ScriptInProgressEvent, ScriptInProgressCustomEvent,
+                 ScriptCompletedEvent]
 event_enums = [CreateClusterEvent, ScriptStartedEvent, ScriptInProgressEvent, ScriptCompletedEvent]
 event_enum_values = [sequence for event in event_enums
                      for sequence in event.__members__.values()]

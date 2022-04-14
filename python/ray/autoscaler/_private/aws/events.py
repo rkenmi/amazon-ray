@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 
 class AwsEventManagerBase(ABC):
+    uri: str
+    parameters: Dict[str, any]
+
     def add_callback(self, event: RayEvent):
         """Adds a callback handler based on the ARN that is supplied in `events.notification_uri`.
         Currently, only SNS topics are supported.
@@ -45,8 +48,16 @@ class AwsEventManagerBase(ABC):
     def publish(self, event: RayEvent, event_data: Optional[Dict[str, Any]] = None):
         global_event_system.execute_callback(event, event_data)
 
-    def _get_region(self):
+    def _get_region(self) -> str:
         return self.uri.split(":")[3]
+
+    @property
+    @abstractmethod
+    def config(self) -> Dict[str, Any]:
+        raise NotImplementedError("Configuration is not defined")
+
+    def set_config(self, config: Dict[str, Any]):
+        self.config = config
 
     @abstractmethod
     def _sns_callback(self, sns_client: SnsHelper, event_data: Dict[str, Any], **kwargs):
@@ -64,10 +75,15 @@ class AwsEventManagerBase(ABC):
 
 class AwsEventManager(AwsEventManagerBase):
     def __init__(self, events_config: Dict[str, Any]):
+        self.events_config = events_config
         self.uri = notification_uri = events_config["notification_uri"]
         assert notification_uri is not None, f"`notification_uri` is a required field in `events`"
         assert "arn:aws" in notification_uri, f"Invalid ARN specified: {notification_uri}"
         self.parameters = events_config.get("parameters", {})
+
+    @property
+    def config(self) -> Dict[str, Any]:
+        return self.events_config
 
     def _sns_callback(self, sns_client: SnsHelper, event_data: Dict[str, Any], **kwargs):
         """SNS callback for sending Ray cluster event data to an SNS topic.
@@ -77,7 +93,7 @@ class AwsEventManager(AwsEventManagerBase):
             event_data: Ray cluster setup event data. This contains the event name, enum ID, and
                 may also contain additional metadata (i.e. the initialization or setup command used
                 during this setup step)
-            **kwargs: Keyword arguments that were injected into `_EventSystem.add_callback_handler`
+            **kwargs: Keyword arguments injected into `_EventSystem.add_callback_handler` before initialization
         """
         try:
             # create a copy of the event data to modify
@@ -88,11 +104,15 @@ class AwsEventManager(AwsEventManagerBase):
             message = {
                 **params,
                 "state": event.state,
-                "setupEventMetadata": event_dict,
+                # "setupEventMetadata": event_dict,
                 "stateSequence": event.value - 1,  # zero-index sequencing
                 "stateDetailStatus": "SUCCESS",
                 "timestamp": round(time.time() * 1000),
             }
+
+            state_detail_description = event_dict.get("stateDetailDescription")
+            if state_detail_description:
+                message["stateDetailDescription"] = state_detail_description
 
             if node_context:
                 message["rayNodeId"] = node_context["node_id"]
