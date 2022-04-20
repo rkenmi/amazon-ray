@@ -98,6 +98,8 @@ class AwsEventManager(AwsEventManagerBase):
             event: RayEvent = event_dict.pop("event")
             node_context: NodeContext = event_dict.get("node_context", {})
             sns_topic_arn, params = self.uri, kwargs
+            custom_description = event_dict.get("customDescription")
+            custom_event_name = event_dict.get("customEventName")
             message = {
                 **params,
                 "state": event.state,
@@ -106,9 +108,11 @@ class AwsEventManager(AwsEventManagerBase):
                 "timestamp": round(time.time() * 1000),
             }
 
-            state_detail_description = event_dict.get("stateDetailDescription")
-            if state_detail_description:
-                message["stateDetailDescription"] = state_detail_description
+            if custom_event_name:
+                message["eventName"] = custom_event_name
+
+            if custom_description:
+                message["stateDetailDescription"] = custom_description
 
             if node_context:
                 message["rayNodeId"] = node_context["node_id"]
@@ -121,4 +125,3 @@ class AwsEventManager(AwsEventManagerBase):
             cli_logger.abort(
                 "{} Error caught when publishing {} create cluster events to SNS",
                 exc.response["Error"], event.name)
-

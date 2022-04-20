@@ -5,10 +5,13 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from ray.autoscaler._private.cli_logger import cli_logger
 
 
-DISPATCHED_STATE = "DISPATCHED"
-STARTED_STATE = "STARTED"
-IN_PROGRESS_STATE = "IN_PROGRESS"
-COMPLETED_STATE = "COMPLETED"
+class States(Enum):
+    UNKNOWN = None,
+    NEW = 1,
+    DISPATCHED = 2,
+    STARTED = 3,
+    IN_PROGRESS = 4,
+    COMPLETED = 5
 
 
 class CreateClusterEvent(Enum):
@@ -32,8 +35,8 @@ class CreateClusterEvent(Enum):
             is completed.
     """
     @property
-    def state(self):
-        return DISPATCHED_STATE
+    def state(self) -> str:
+        return States.DISPATCHED.name
 
     up_started = auto()
     ssh_keypair_downloaded = auto()
@@ -50,37 +53,30 @@ class CreateClusterEvent(Enum):
 
 class ScriptStartedEvent(Enum):
     """Events to track for Ray scripts that are executed.
-
-    Attributes:
-        start_initializing : Invoked right before running a Ray script.
     """
     @property
-    def state(self):
-        return STARTED_STATE
+    def state(self) -> str:
+        return States.STARTED.name
 
     start_initializing = auto()
 
 
 class ScriptInProgressEvent(Enum):
     """Events to track during execution of Ray scripts.
-
-    Attributes:
-        in_progress : Invoked when the Ray script starts execution.
     """
     @property
-    def state(self):
-        return IN_PROGRESS_STATE
+    def state(self) -> str:
+        return States.IN_PROGRESS.name
 
     in_progress = auto()
 
 
 class ScriptInProgressCustomEvent:
     """Custom, user-defined events to track during execution of Ray scripts.
-
     """
     @property
-    def state(self):
-        return IN_PROGRESS_STATE
+    def state(self) -> str:
+        return States.IN_PROGRESS.name
 
     @property
     def name(self) -> str:
@@ -95,16 +91,12 @@ class ScriptInProgressCustomEvent:
         self.state_sequence = state_sequence
 
 
-
 class ScriptCompletedEvent(Enum):
     """Events to track for Ray scripts that are executed.
-
-    Attributes:
-        complete_success : Invoked when the Ray script execution succeeds.
     """
     @property
-    def state(self):
-        return COMPLETED_STATE
+    def state(self) -> str:
+        return States.COMPLETED.name
 
     complete_success = auto()
 

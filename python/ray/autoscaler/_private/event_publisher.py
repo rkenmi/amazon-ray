@@ -1,6 +1,6 @@
 from abc import abstractmethod, ABC
-from typing import Any
 from .event_system import RayEvent
+
 
 class EventPublisher(ABC):
     @abstractmethod
