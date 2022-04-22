@@ -6,11 +6,11 @@ from ray.autoscaler._private.cli_logger import cli_logger
 
 
 class States(Enum):
-    UNKNOWN = None,
-    NEW = 1,
-    DISPATCHED = 2,
-    STARTED = 3,
-    IN_PROGRESS = 4,
+    UNKNOWN = None
+    NEW = 1
+    DISPATCHED = 2
+    STARTED = 3
+    IN_PROGRESS = 4
     COMPLETED = 5
 
 
