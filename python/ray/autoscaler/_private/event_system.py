@@ -1,7 +1,17 @@
+import functools
 from enum import Enum, auto
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from ray.autoscaler._private.cli_logger import cli_logger
+
+
+class States(Enum):
+    UNKNOWN = None
+    NEW = 1
+    DISPATCHED = 2
+    STARTED = 3
+    IN_PROGRESS = 4
+    COMPLETED = 5
 
 
 class CreateClusterEvent(Enum):
@@ -24,6 +34,9 @@ class CreateClusterEvent(Enum):
         cluster_booting_completed : Invoked after cluster booting
             is completed.
     """
+    @property
+    def state(self) -> str:
+        return States.DISPATCHED.name
 
     up_started = auto()
     ssh_keypair_downloaded = auto()
@@ -36,6 +49,63 @@ class CreateClusterEvent(Enum):
     start_ray_runtime = auto()
     start_ray_runtime_completed = auto()
     cluster_booting_completed = auto()
+
+
+class ScriptStartedEvent(Enum):
+    """Events to track for Ray scripts that are executed.
+    """
+    @property
+    def state(self) -> str:
+        return States.STARTED.name
+
+    start_initializing = auto()
+
+
+class ScriptInProgressEvent(Enum):
+    """Events to track during execution of Ray scripts.
+    """
+    @property
+    def state(self) -> str:
+        return States.IN_PROGRESS.name
+
+    in_progress = auto()
+
+
+class ScriptInProgressCustomEvent:
+    """Custom, user-defined events to track during execution of Ray scripts.
+    """
+    @property
+    def state(self) -> str:
+        return States.IN_PROGRESS.name
+
+    @property
+    def name(self) -> str:
+        return self.event_name
+
+    @property
+    def value(self) -> int:
+        return self.state_sequence
+
+    def __init__(self, event_name: str, state_sequence: int):
+        self.event_name = event_name
+        self.state_sequence = state_sequence
+
+
+class ScriptCompletedEvent(Enum):
+    """Events to track for Ray scripts that are executed.
+    """
+    @property
+    def state(self) -> str:
+        return States.COMPLETED.name
+
+    complete_success = auto()
+
+
+RayEvent = Union[CreateClusterEvent, ScriptStartedEvent, ScriptInProgressEvent, ScriptInProgressCustomEvent,
+                 ScriptCompletedEvent]
+event_enums = [CreateClusterEvent, ScriptStartedEvent, ScriptInProgressEvent, ScriptCompletedEvent]
+event_enum_values = [sequence for event in event_enums
+                     for sequence in event.__members__.values()]
 
 
 class _EventSystem:
@@ -54,6 +124,8 @@ class _EventSystem:
             event: str,
             callback: Union[Callable[[Dict], None], List[Callable[[Dict],
                                                                   None]]],
+            *args,
+            **kwargs,
     ):
         """Stores callback handler for event.
 
@@ -63,17 +135,20 @@ class _EventSystem:
                 registered against.
             callback (Callable[[Dict], None]): Callable object that is invoked
                 when specified event occurs.
+            *args: Variable length arguments to be injected into callbacks.
+            **kwargs: Keyword arguments to be injected into callbacks.
         """
-        if event not in CreateClusterEvent.__members__.values():
+        if event not in event_enum_values:
             cli_logger.warning(f"{event} is not currently tracked, and this"
                                " callback will not be invoked.")
 
+        callback = functools.partial(callback, *args, **kwargs)
         self.callback_map.setdefault(
             event,
             []).extend([callback] if type(callback) is not list else callback)
 
     def execute_callback(self,
-                         event: CreateClusterEvent,
+                         event: RayEvent,
                          event_data: Optional[Dict[str, Any]] = None):
         """Executes all callbacks for event.
 
@@ -86,7 +161,7 @@ class _EventSystem:
         if event_data is None:
             event_data = {}
 
-        event_data["event_name"] = event
+        event_data["event"] = event
         if event in self.callback_map:
             for callback in self.callback_map[event]:
                 callback(event_data)
@@ -103,3 +178,4 @@ class _EventSystem:
 
 
 global_event_system = _EventSystem()
+
